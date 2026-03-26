@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 # ─────────────────────────────────────────────
 DATA_FILE   = Path("data/numbers_landmarks.npz")
 MODEL_DIR   = Path("models")
-MODEL_PATH  = MODEL_DIR / "numbers_model.keras"
+MODEL_PATH  = MODEL_DIR / "numbers_model.h5"
 LABEL_PATH  = MODEL_DIR / "numbers_label_map.npy"
 
 EPOCHS      = 80

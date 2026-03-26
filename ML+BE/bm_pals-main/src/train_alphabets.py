@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 # ─────────────────────────────────────────────
 DATA_FILE   = Path("data/alphabets_landmarks.npz")
 MODEL_DIR   = Path("models")
-MODEL_PATH  = MODEL_DIR / "alphabets_model.keras"
+MODEL_PATH  = MODEL_DIR / "alphabets_model.h5"
 LABEL_PATH  = MODEL_DIR / "alphabets_label_map.npy"
 
 EPOCHS      = 100

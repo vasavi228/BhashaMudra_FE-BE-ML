@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { 
-  Camera, CheckCircle, HelpCircle, RefreshCcw,
+  Camera, HelpCircle, RefreshCcw,
   Volume2, Loader, Star, ThumbsUp, ChevronRight,
   ChevronLeft, ArrowLeft, InfoIcon, XCircle
 } from 'lucide-react';
@@ -24,7 +24,7 @@ const LessonInterface = () => {
   const [confetti, setConfetti] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [detectionResult, setDetectionResult] = useState<{label: string, confidence: number} | null>(null);
-  const [timer, setTimer] = useState(15);
+  const [timer, setTimer] = useState(10);
   const [timerActive, setTimerActive] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -44,7 +44,7 @@ const LessonInterface = () => {
     setIsAudioPlaying(false);
     setDetectionResult(null);
     setTimerActive(false);
-    setTimer(15);
+    setTimer(10);
     stopCamera();
 
     if (videoRef.current) {
@@ -57,11 +57,13 @@ const LessonInterface = () => {
     }
   }, [letter]);
 
+  // Countdown + auto-capture at 0
   useEffect(() => {
     if (timerActive && timer > 0) {
       timerRef.current = setTimeout(() => setTimer(prev => prev - 1), 1000);
-    } else if (timer === 0) {
+    } else if (timerActive && timer === 0) {
       setTimerActive(false);
+      handleCheckSign();
     }
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [timerActive, timer]);
@@ -75,8 +77,9 @@ const LessonInterface = () => {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       streamRef.current = stream;
       setCameraActive(true);
-      setTimer(15);
+      setTimer(10);
       setTimerActive(true);
+      setDetectionResult(null);
       setTimeout(() => {
         if (cameraRef.current) {
           cameraRef.current.srcObject = stream;
@@ -95,25 +98,24 @@ const LessonInterface = () => {
     }
     setCameraActive(false);
     setTimerActive(false);
-    setTimer(15);
+    setTimer(10);
   };
 
   const captureFrame = (): string | null => {
-  if (!cameraRef.current) return null;
-  const canvas = document.createElement('canvas');
-  canvas.width = cameraRef.current.videoWidth;
-  canvas.height = cameraRef.current.videoHeight;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return null;
-  ctx.translate(canvas.width, 0);
-  ctx.scale(-1, 1);
-  // Draw WITHOUT flipping — matches Python script behavior
-  ctx.drawImage(cameraRef.current, 0, 0);
-  return canvas.toDataURL('image/jpeg', 0.8);
-};
+    if (!cameraRef.current) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = cameraRef.current.videoWidth;
+    canvas.height = cameraRef.current.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.translate(canvas.width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(cameraRef.current, 0, 0);
+    return canvas.toDataURL('image/jpeg', 0.8);
+  };
 
   const handleCheckSign = async () => {
-    if (!cameraActive || isChecking) return;
+    if (isChecking) return;
     setIsChecking(true);
     setDetectionResult(null);
 
@@ -138,10 +140,9 @@ const LessonInterface = () => {
 
       setDetectionResult({ label: result.label, confidence: result.confidence });
 
-      if (result.confidence >= 0.80 && result.label === letter) {
+      if (result.confidence >= 0.75 && result.label === letter) {
         setShowSuccess(true);
         setConfetti(true);
-        setTimerActive(false);
 
         const user = await getUser();
         if (user) {
@@ -195,6 +196,11 @@ const LessonInterface = () => {
       navigate(`/learn/letter/${String.fromCharCode(letter.charCodeAt(0) - 1)}`);
     }
   };
+
+  // Compute ring stroke for circular countdown
+  const RADIUS = 28;
+  const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+  const strokeDashoffset = CIRCUMFERENCE * (1 - timer / 10);
 
   return (
     <div className="min-h-screen bg-gradient-to-r from-[#98E7DE] to-[#ffe8e1]">
@@ -330,12 +336,45 @@ const LessonInterface = () => {
                   <video ref={cameraRef} autoPlay playsInline muted
                     className="w-full h-full object-cover"
                   />
-                  {/* Timer badge */}
-                  {timerActive && (
-                    <div className="absolute top-4 right-4 bg-[#004748] text-white px-3 py-1 rounded-full font-semibold">
-                      {timer}s
+
+                  {/* Circular Countdown Timer */}
+                  {(timerActive || isChecking) && (
+                    <div className="absolute top-4 right-4 flex items-center justify-center">
+                      <svg width="72" height="72" className="drop-shadow-lg">
+                        {/* Background ring */}
+                        <circle
+                          cx="36" cy="36" r={RADIUS}
+                          fill="rgba(0,0,0,0.5)"
+                          stroke="rgba(255,255,255,0.2)"
+                          strokeWidth="5"
+                        />
+                        {/* Countdown ring */}
+                        <circle
+                          cx="36" cy="36" r={RADIUS}
+                          fill="transparent"
+                          stroke={timer <= 3 ? '#f87171' : '#98E7DE'}
+                          strokeWidth="5"
+                          strokeLinecap="round"
+                          strokeDasharray={CIRCUMFERENCE}
+                          strokeDashoffset={strokeDashoffset}
+                          transform="rotate(-90 36 36)"
+                          style={{ transition: 'stroke-dashoffset 1s linear, stroke 0.3s' }}
+                        />
+                        {/* Timer number */}
+                        <text
+                          x="36" y="36"
+                          textAnchor="middle"
+                          dominantBaseline="central"
+                          fill="white"
+                          fontSize="18"
+                          fontWeight="bold"
+                        >
+                          {isChecking ? '✓' : timer}
+                        </text>
+                      </svg>
                     </div>
                   )}
+
                   {/* Detection result badge */}
                   {detectionResult && (
                     <div className="absolute top-3 left-3 flex flex-col gap-2">
@@ -346,7 +385,7 @@ const LessonInterface = () => {
                         <div className="flex justify-between mb-1">
                           <span>Confidence</span>
                           <span className={
-                            detectionResult.confidence >= 0.80 ? 'text-green-400' :
+                            detectionResult.confidence >= 0.75 ? 'text-green-400' :
                             detectionResult.confidence >= 0.60 ? 'text-yellow-400' : 'text-red-400'
                           }>
                             {Math.round(detectionResult.confidence * 100)}%
@@ -355,7 +394,7 @@ const LessonInterface = () => {
                         <div className="w-full h-2 bg-white/20 rounded-full overflow-hidden">
                           <div
                             className={`h-full rounded-full transition-all duration-500 ${
-                              detectionResult.confidence >= 0.80 ? 'bg-green-400' :
+                              detectionResult.confidence >= 0.75 ? 'bg-green-400' :
                               detectionResult.confidence >= 0.60 ? 'bg-yellow-400' : 'bg-red-400'
                             }`}
                             style={{ width: `${Math.round(detectionResult.confidence * 100)}%` }}
@@ -364,6 +403,7 @@ const LessonInterface = () => {
                       </div>
                     </div>
                   )}
+
                   <button onClick={stopCamera}
                     className="absolute bottom-4 right-4 bg-red-500 text-white px-4 py-2 rounded-lg"
                   >
@@ -375,30 +415,21 @@ const LessonInterface = () => {
                   className="bg-[#004748] text-white px-6 py-3 rounded-lg flex items-center gap-2"
                 >
                   <Camera className="h-5 w-5" />
-                  Start Camera
+                  Practice
                 </button>
               )}
             </div>
-            <div className="p-4 flex flex-col items-center">
-              <button onClick={handleCheckSign}
-                disabled={!cameraActive || isChecking}
-                className={`px-8 py-2 rounded-lg flex items-center gap-2 text-white mb-4 transition-all
-                  ${!cameraActive || isChecking ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-500 hover:bg-green-600'}`}
-              >
-                {isChecking
-                  ? <><Loader className="h-5 w-5 animate-spin" /> Checking...</>
-                  : <><CheckCircle className="h-5 w-5" /> Check Sign</>
-                }
-              </button>
 
+            {/* Info hint — no Check Sign button */}
+            <div className="p-4 flex flex-col items-center">
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
                 className="bg-[#98E7DE]/30 border border-[#004748]/20 rounded-lg p-4 w-full max-w-md"
               >
                 <div className="flex items-start gap-3">
                   <InfoIcon className="h-5 w-5 text-[#004748] flex-shrink-0 mt-0.5" />
                   <p className="text-[#004748] text-sm leading-relaxed">
-                    Click 'Start Camera' and perform the sign for letter <strong>{letter}</strong> within 15 seconds.
-                    The system will automatically evaluate your sign.
+                    Click <strong>Practice</strong> and hold the sign for letter <strong>{letter}</strong>.
+                    The photo is taken automatically after <strong>10 seconds</strong>.
                   </p>
                 </div>
               </motion.div>
