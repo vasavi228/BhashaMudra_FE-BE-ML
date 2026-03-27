@@ -1,16 +1,3 @@
-"""
-detect_alphabets_no_hw.py
-==========================
-Live ISL alphabets (A-Z) detection — no glove needed.
-
-- Loads alphabets_model.keras only
-- Both hands (right + left), 126-dim feature vector
-- Per-finger feedback for each hand via occlusion sensitivity
-- Green = finger contributing correctly, Red = finger is off
-
-Press [Q] to quit.
-"""
-
 import cv2
 import numpy as np
 import mediapipe as mp

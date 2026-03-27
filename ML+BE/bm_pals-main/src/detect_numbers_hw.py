@@ -1,22 +1,3 @@
-"""
-detect_numbers_hw.py
-=====================
-Live ISL numbers (1-9) detection + ESP32 haptic glove feedback.
-
-- Loads numbers_model.keras only
-- Right hand only
-- Wrong fingers found via occlusion sensitivity — no hardcoded patterns
-- Sends wrong finger IDs over serial: "024\n" → buzz fingers 0, 2, 4
-- Sends "X\n" when confidence crosses threshold (sign correct)
-
-Usage:
-  python src/detect_numbers_hw.py --port COM13
-  python src/detect_numbers_hw.py --port /dev/ttyUSB0 --baud 115200
-  python src/detect_numbers_hw.py --port COM13 --thresh 0.80
-
-Press [Q] to quit.
-"""
-
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -33,6 +14,7 @@ from utils import (
     draw_base_panel, draw_finger_row, draw_mode_badge,
     compose_display, FINGER_NAMES_R,
     C_BG, C_PANEL, C_GREEN, C_RED, C_GREY, C_VIB, C_DIM, C_ACCENT, C_WHITE,
+    FINGER_LANDMARK_GROUPS,
 )
 
 # ─────────────────────────────────────────────────────────────
@@ -45,6 +27,41 @@ OCCLUSION_EVERY  = 3
 OCCLUSION_DROP   = 0.10
 PANEL_W          = 380
 # ─────────────────────────────────────────────────────────────
+
+
+def worst_finger(model, feat_vec, base_conf, pred_idx,
+                 hand_offset=0, drop_threshold=0.05):
+    """
+    Returns a list with exactly ONE finger index (0-4):
+    the finger whose presence is hurting confidence the most.
+
+    Occlude each finger in turn and measure the confidence drop.
+    A correctly-positioned finger causes a BIG drop when removed
+    (the model loses useful info). A wrong finger causes a SMALL
+    drop (or even a rise) because removing it stops confusing the model.
+
+    → Smallest drop = most wrong finger → buzz it.
+
+    Returns [finger_idx] or [] if no finger clears the threshold.
+    """
+    drops = []
+    for finger_idx, lm_indices in enumerate(FINGER_LANDMARK_GROUPS):
+        occluded = feat_vec.copy()
+        for lm_idx in lm_indices:
+            start = hand_offset + lm_idx * 3
+            occluded[start: start + 3] = 0.0
+        conf_occ = float(
+            model.predict(occluded.reshape(1, -1), verbose=0)[0][pred_idx]
+        )
+        drops.append((base_conf - conf_occ, finger_idx))
+
+    # Smallest drop = the finger hurting confidence most
+    drops.sort(key=lambda x: x[0])
+    worst_drop, worst_idx = drops[0]
+
+    if worst_drop < drop_threshold:
+        return [worst_idx]
+    return []
 
 
 def build_panel(panel, pred_label, confidence, thresh,
@@ -77,20 +94,17 @@ def build_panel(panel, pred_label, confidence, thresh,
         footer_text = "[Q] quit",
     )
 
-    # Glove status dot (top-right of header)
     cv2.circle(panel, (w - 14, 26), 5, glove_col, -1)
 
-    # Finger rows
     if right_present and pred_label:
         for i, fname in enumerate(FINGER_NAMES_R):
-            is_wrong  = (i in wrong_fingers)
-            is_vib    = (i in vibrating)
-            fconf     = max(0.0, confidence - 0.20) if is_wrong else min(1.0, confidence + 0.08)
+            is_wrong = (i in wrong_fingers)
+            is_vib   = (i in vibrating)
+            fconf    = max(0.0, confidence - 0.20) if is_wrong else min(1.0, confidence + 0.08)
             draw_finger_row(panel, 20, row_y + i * 42, fname,
                             is_wrong=is_wrong, fconf=fconf,
                             is_vibrating=is_vib, row_w=w - 40, row_h=40)
 
-        # Vibration strip at bottom
         if vibrating and serial_ok:
             names = ", ".join(FINGER_NAMES_R[i] for i in vibrating)
             cv2.rectangle(panel, (20, h-78), (w-20, h-56), (40, 28, 56), -1)
@@ -128,9 +142,12 @@ def main():
         print("       Running visual-only (no glove feedback)")
 
     def send(msg: str):
+        """Send a single character to the ESP32."""
         if ser and serial_ok:
-            try: ser.write((msg + "\n").encode())
-            except Exception as e: print(f"[WARN] Serial: {e}")
+            try:
+                ser.write((msg + "\n").encode())
+            except Exception as e:
+                print(f"[WARN] Serial: {e}")
 
     # ── MediaPipe ───────────────────────────────────────────
     mp_hands = mp.solutions.hands
@@ -149,7 +166,7 @@ def main():
     conf_buffer  = deque(maxlen=SMOOTHING_FRAMES)
     pred_label   = ""
     confidence   = 0.0
-    cached_wrong = []
+    cached_wrong = []   # always 0 or 1 element
     vibrating    = []
     last_sent    = ""
     last_time    = 0.0
@@ -158,7 +175,8 @@ def main():
 
     while True:
         ret, frame = cap.read()
-        if not ret: break
+        if not ret:
+            break
 
         frame = cv2.flip(frame, 1)
         h, fw  = frame.shape[:2]
@@ -186,23 +204,24 @@ def main():
         feat_vec = None
         if right_lm is not None:
             feat_vec = normalize_hand(right_lm)
-            probs    = model.predict(feat_vec.reshape(1,-1), verbose=0)[0]
+            probs    = model.predict(feat_vec.reshape(1, -1), verbose=0)[0]
             idx      = int(np.argmax(probs))
             pred_buffer.append(str(labels[idx]))
             conf_buffer.append(float(probs[idx]))
             pred_label = Counter(pred_buffer).most_common(1)[0][0]
             confidence  = float(np.mean(conf_buffer))
         else:
-            pred_buffer.clear(); conf_buffer.clear()
+            pred_buffer.clear()
+            conf_buffer.clear()
             pred_label, confidence = "", 0.0
             cached_wrong = []
 
-        # ── Occlusion: find wrong fingers ──────────────────
+        # ── Find single worst finger ───────────────────────
         if (feat_vec is not None and pred_label
                 and confidence < args.thresh
                 and frame_count % OCCLUSION_EVERY == 0):
             pred_idx     = int(np.where(labels == pred_label)[0][0])
-            cached_wrong = find_wrong_fingers(
+            cached_wrong = worst_finger(
                 model, feat_vec, confidence, pred_idx,
                 hand_offset=0, drop_threshold=OCCLUSION_DROP,
             )
@@ -211,17 +230,21 @@ def main():
             cached_wrong = []
 
         # ── Serial logic ───────────────────────────────────
+        # Arduino cases: '1'=Thumb '2'=Index '3'=Middle '4'=Ring '5'=Pinky
+        # Our finger indices are 0-4, so we add 1 before sending.
         now = time.time()
         vibrating = []
 
         if pred_label and right_present:
             if confidence < args.thresh and cached_wrong:
-                vibrating = cached_wrong
-                msg = "".join(str(i) for i in vibrating)
-                if msg != last_sent and (now - last_time) > COOLDOWN:
-                    send(msg)
-                    last_sent, last_time = msg, now
-                    print(f"→ Buzz: {msg}  (sign={pred_label}, conf={confidence:.2f})")
+                vibrating    = cached_wrong
+                finger_char  = str(cached_wrong[0] + 1)   # 0-indexed → '1'-'5'
+                if finger_char != last_sent and (now - last_time) > COOLDOWN:
+                    send(finger_char)
+                    last_sent, last_time = finger_char, now
+                    print(f"→ Buzz: {finger_char} "
+                          f"({FINGER_NAMES_R[cached_wrong[0]]})  "
+                          f"sign={pred_label}  conf={confidence:.2f}")
 
             elif confidence >= args.thresh and last_sent != "X":
                 send("X")
@@ -229,8 +252,8 @@ def main():
                 print(f"→ Correct! Stop  (sign={pred_label}, conf={confidence:.2f})")
 
         elif not pred_label and last_sent not in ("", "X"):
-            # Hand left frame — stop vibration
-            send("X"); last_sent = "X"
+            send("X")
+            last_sent = "X"
 
         # ── Draw ───────────────────────────────────────────
         cam_w = fw - PANEL_W
@@ -245,10 +268,13 @@ def main():
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-    # Cleanup
     if ser:
-        try: send("X"); time.sleep(0.1); ser.close()
-        except: pass
+        try:
+            send("X")
+            time.sleep(0.1)
+            ser.close()
+        except:
+            pass
     cap.release()
     cv2.destroyAllWindows()
 

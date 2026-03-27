@@ -1,16 +1,3 @@
-"""
-detect_numbers_no_hw.py
-========================
-Live ISL numbers (1-9) detection — no glove needed.
-
-- Loads numbers_model.keras only
-- Right hand only
-- Per-finger feedback: green = correct position, red = needs adjustment
-- Wrong fingers found via occlusion sensitivity (model-driven, no hardcoded patterns)
-
-Press [Q] to quit.
-"""
-
 import cv2
 import numpy as np
 import mediapipe as mp
